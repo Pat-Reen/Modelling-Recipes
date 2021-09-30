@@ -355,5 +355,7 @@ ROC (Receiver Operating Characteristic) curve
 
 # References {.tabset .tabset-fade .tabset-pills}
 [R Markdown Cookbook](https://bookdown.org/yihui/rmarkdown-cookbook/)
+
 [Business mix - Actuaries Institute Preso](http://www.actuaries.org/HongKong2012/Presentations/WBR5_Louw.pdf)
+
 [Tidyverse documentation](https://dplyr.tidyverse.org/index.html)
