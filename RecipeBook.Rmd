@@ -13,7 +13,7 @@ link-citations: yes
 
 # Overview {.tabset .tabset-fade .tabset-pills}
 ## Background 
-This document sets out a few practical recipes for modelling with (life) insurance data. Insurance events are typically low probability events - these recipes consider some of the limitations of "small data" model fitting (data where the observations of interest are sparse) and other topics for insurance like comparison to standard tables. Themes
+This document sets out a few practical recipes for modelling with (life) insurance data. Insurance events are typically of low probability - these recipes consider some of the limitations of "small data" model fitting (where the observations of interest are sparse) and other topics for insurance like comparisons to standard tables. Themes
 
 * Common data transforms, summary stats, and simple visualisations
 * Regression 
@@ -35,16 +35,19 @@ library(scales)     # data formatting
 library(dplyr)      # tidyverse: data manipulation
 library(tidyr)      # tidyverse: tidy messy data
 library(corrplot)   # correlation matrix visualisation, optional
-library(ggplot2)    # graphs
+library(ggplot2)    # tidyverse: graphs
+library(pdp)        # tidyverse: arranging plots
 library(GGally)     # tidyverse: extension of ggplot2
 library(ggthemes)   # tidyverse: additional themes for ggplot, optional
 library(plotly)     # graphs, including 3D 
 library(caret)      # sampling techniques
 library(broom)      # tidyverse: visualising statistical objects
 library(pROC)       # visualising ROC curves
+library(lmtest)     # tests for regression models
 
 # packages below have some interaction with earlier packages, not always needed
 library(arm)        # binned residual plot
+library(msme)       # statistical tests, pearson dispersion
 library(MASS)       # statistics
 
 ```
@@ -59,13 +62,20 @@ ifrm <- function(x, env = globalenv())
 }
 ```
 
+## Further reading
+A few books and articles of interest:
+
+* [R Markdown Cookbook](https://bookdown.org/yihui/rmarkdown-cookbook/) has everything you need to know to set up an r markdown document like this one.
+* [Generalised Linear Models for Insurance Data](https://www.cambridge.org/au/academic/subjects/statistics-probability/statistics-econometrics-finance-and-insurance/generalized-linear-models-insurance-data?format=HB&isbn=9780521879149) is a great book introducing GLMs in the context of insurance, considering problems specific to insurance data.
+* [Tidyverse documentation](https://www.tidyverse.org/) full set of documentation for Tidyverse packages (packages for data science) e.g. dplyr for data manipulation; tidyr for tidying up messy data; ggplot for visualisation.
+
 # Data Simulation {.tabset .tabset-fade .tabset-pills}
 This section sets out a method for generating dummy data. The simulated data is intended to reflect typical data used in an analysis of disability income incidence experience and is used throughout this analysis. Replace this data with your actual data.
 
 More detail on the techniques used can be found in the section on data manipulation.
 
 ## Simulating policies
-Here we are using simulated data to fit a model. Replace with own data. We start by simulating a mix of 200k policies over 3 years. Some simplifying assumptions e.g. nil lapse/ new bus, no indexation. Mix of business assumptions for benefit period, waiting period and occupation taken  taken from [@BusMix], with the remainder based on an anecdotal view of industry mix not intended to be reflective of any one business. 
+We start by simulating a mix of 200k policies over 3 years. Some simplifying assumptions e.g. nil lapse/ new bus (no allowance for part years of exposure), no indexation. Mix of business assumptions for benefit period, waiting period and occupation taken  taken from [@BusMix], with the remainder based on an anecdotal view of industry mix not intended to be reflective of any one business. 
 
 ```{r Generate dataframe}
 # set the seed value (for the random number generator) so that the simulated data frame can be replicated later
@@ -156,6 +166,7 @@ The data generated above are records for each individual policy, however data li
 # group data (see section on data manipulation below)
 df_grp <- df %>% group_by(cal_year, policy_year, sex, smoker, benefit_period, waiting_period, occupation, age) %>% 
 summarise(sum_assured=sum(sum_assured),inc_count_sick_exp=sum(inc_sick_expected),inc_count_acc_exp=sum(inc_acc_expected),        inc_count_sick=sum(inc_count_sick),inc_count_acc=sum(inc_count_acc),inc_count_tot=sum(inc_count_tot),inc_amount_sick=sum(inc_amount_sick),inc_amount_acc=sum(inc_amount_acc),inc_amount_tot=sum(inc_amount_tot), exposure=n(),.groups = 'drop') 
+
 ```
 
 Check that the exposure for the grouped data is the same as the total on ungrouped:
@@ -204,6 +215,13 @@ df$smoker <- factor(df$smoker, levels = c("n","s","u"))
 df$benefit_period <- factor(df$benefit_period, levels = c("a65","2yr","5yr"))
 df$waiting_period <- factor(df$waiting_period, labels = c("30d","14d","720d","90d"))
 df$occupation <- factor(df$occupation, labels = c("prof", "sed","techn","white","blue"))
+
+# do the same for the grouped data
+df_grp$sex <- factor(df_grp$sex, levels = c("m","f","u"))
+df_grp$smoker <- factor(df_grp$smoker, levels = c("n","s","u"))
+df_grp$benefit_period <- factor(df_grp$benefit_period, levels = c("a65","2yr","5yr"))
+df_grp$waiting_period <- factor(df_grp$waiting_period, labels = c("30d","14d","720d","90d"))
+df_grp$occupation <- factor(df_grp$occupation, labels = c("prof", "sed","techn","white","blue"))
 ```
 
 If the column is already a factor, you can extract the levels to show what order they will be used in our models
@@ -234,7 +252,7 @@ subset(df, age <25 | age > 60)
 ```
 
 ## Manipulation methods
-We might want to modify our data frame to prepare it for fitting our models. The section below looks at a few simple data manipulations. Here we also introduce the infix operator (%>%); this operator passes the argument to the left of it over to the code on the right, so df %>% "operation" passes the data frame df over to the operation on the right.
+We might want to modify our data frame to prepare it for fitting our models. The section below looks at a few simple data manipulations. Here we also introduce the infix operator (%>%); this operator passes the argument to the left of it over to the code on the right, so df %>% "operation" passes the data frame "df" over to the operation on the right.
 
 ```{r Manipulation Methods, class.source = 'fold-show', eval=FALSE}
 # create a copy of the dataframe to work from
@@ -275,7 +293,7 @@ We might want to modify our data frame to prepare it for fitting our models. The
 ```
 
 ## Missing data
-By default, the regression model will exclude any observation with missing values on its predictors. Missing values can be treated as a separate category for categorical data. For missing numeric data, imputation is a potential solution.
+By default, the regression model will exclude any observation with missing values on its predictors. Missing values can be treated as a separate category for categorical data. For missing numeric data, imputation is a potential solution. In the example below we replace missing age with an average and add an indicator to the data to flag records that have been imputed.
 
 ```{r Missing data, class.source = 'fold-show', eval=FALSE}
 # find the average age among non-missing values
@@ -292,10 +310,13 @@ The tables and graphs that follow look at:
 * the mix of business over rating factors using some of the selection methods described: These are all consistent with the simulation specification. 
 * the correlation of ordered numerical rating factors: age and sum assured as well as age and policy year are positively correlated.
 
+Data might need to be [transformed](https://en.wikipedia.org/wiki/Data_transformation_(statistics)) in order to make the data more suitable to the assumptions within the model. Not considered here.
+
 ```{r Detatch MASS, class.source = 'fold-show', warning = FALSE, echo=FALSE, results = FALSE}
 # MASS package interferes with pairs() and cor() and others
 require(arm) # package
 detach(package:arm)
+detach(package:msme)
 detach(package:MASS)
 ```
 
@@ -327,10 +348,26 @@ df_sample %>% select(age,policy_year,sum_assured) %>% pairs
 cor <-df_sample %>% select(age,policy_year,sum_assured) %>% cor
 cor
 # corrplot() is an alternative to visualise a correlation matrix
-corrplot(cor)
+corrplot(cor, 
+  addCoef.col = "black", # add coefficient of correlation
+  method="color", 
+  sig.level = 0.01, insig = "blank", 
+  tl.col="black", # tl stands for text label
+  tl.srt=45
+  ) 
+```
 
+ggpairs() similarly shows correlations for ordered numeric data as well as other summary stats:
+
+```{r Review exposure data - ggpairs, class.source = 'fold-show', warning = FALSE, message=FALSE}
 #ggpairs() similarly shows correlations for ordered numeric data as well as other summary stats
-df_sample %>% select(age,policy_year,sum_assured,sex, smoker) %>% ggpairs
+df_sample %>% select(age,policy_year,sum_assured,sex, smoker) %>% 
+ggpairs(columns = 1:3, aes(color = sex, alpha = 0.5),
+        upper = list(continuous = wrap("cor", size = 2.5)),
+        lower = list(continuous = "smooth"))
+
+df_sample %>% select(age,policy_year,sum_assured,sex, smoker) %>% 
+ggpairs(columns = c("sum_assured", "smoker"), aes(color = sex, alpha = 0.5))
 ```
 
 Review summary statistics for subsets of data.
@@ -421,12 +458,12 @@ geom_smooth(method = "glm", se=FALSE)
 ### Themes
 You can add a themes layer to your graph [@ggplot_themes], for example 
 
-theme_gray()        Gray background and white grid lines.
-theme_bw()          White background and gray grid lines. 
-theme_linedraw()    A theme with only black lines of various widths on white backgrounds.
-theme_light()       A theme similar to theme_linedraw() but with light grey lines and axes, to direct more attention towards the data.
-theme_dark()        Similar to theme_light() but with a dark background.
-Others              e.g. theme_minimal() and theme_classic()
+* theme_gray()        |Gray background and white grid lines.
+* theme_bw()          |White background and gray grid lines. 
+* theme_linedraw()    |A theme with only black lines of various widths on white backgrounds.
+* theme_light()       |A theme similar to theme_linedraw() but with light grey lines and axes, to direct more attention towards the data.
+* theme_dark()        |Similar to theme_light() but with a dark background.
+* Others              |e.g. theme_minimal() and theme_classic()
 
 Other packages like ggthemes carry many more options. Example of added themes layer below. See also these examples [these examples](https://yutannihilation.github.io/allYourFigureAreBelongToUs/ggthemes/) from ggthemes.
 
@@ -458,7 +495,7 @@ plot_base
 
 ```
 
-We can add a modeled outcome to the 3D chart. For detail on the model fit, see those sections. 
+We can add a modeled outcome to the 3D chart. For detail on the model fit, see later sections. 
 
 ```{r Visualisation methods - 3D plane, class.source = 'fold-show', warning = FALSE, message=FALSE}
 
@@ -538,7 +575,7 @@ theme_pander() + scale_color_gdocs()
 
 Consider claim rate:
 
-```{r Review claim data - plot claim rate, class.source = 'fold-show'}
+```{r Review claim data - plot claim rate, class.source = 'fold-show', warning = FALSE, message=FALSE}
 # given the actual count of claims is so low, it might be more useful to consider the claim rate
 # use the manipulation methods from earlier to get claim rates by age and sex for accident and sickness; filter out unknown sex and age with low exposure
 # this shows a clear trend by age for males and females
@@ -556,13 +593,12 @@ labs(x="Age", y="sick rate", title = "Sickness rate by age") +
 theme_pander() + scale_color_gdocs()
 ```
 
-We can split the graph above into a few tiles to show the rates by other explanatory variables like occupation using [facet_wrap](https://ggplot2-book.org/facet.html); see also "facet_grid".
+We can split the graph above into a few tiles to show the rates by other explanatory variables like occupation using [facet_wrap](https://ggplot2-book.org/facet.html); see also "facet_grid". Can use grid.arrange(plot_1,plot_2, plot_3) from the pdp package to arrange unrelated pplot items.
 
 ```{r Review claim data - more vis, class.source = 'fold-show', warning = FALSE, message=FALSE}
 # as above, but adding occupation
 df_grouped <- df %>% filter(sex != "u", between(age, 30,60)) %>% group_by(age,sex,occupation) %>% summarise(total_sick=sum(inc_count_sick),total_acc=sum(inc_count_acc), exposure=n(),.groups = 'drop') %>% mutate(sick_rate = total_sick/exposure, acc_rate = total_acc/exposure) 
 
-# White c("prof","sed","techn","blue","white")
 df_grouped %>%
 # used ggplot to graph the results
 ggplot(aes(x=age,y=sick_rate,color=sex)) +
@@ -573,6 +609,22 @@ geom_smooth(method = 'glm',se=FALSE) +
 labs(x="Age", y="sick rate", title = "Sickness rate by age, occupation") +
 theme_pander() + scale_color_gdocs() +
 facet_wrap(~occupation, ncol=2, nrow=3)
+```
+
+Consider sickness rate by occupation:
+
+```{r Review claim data - boxplot, class.source = 'fold-show', warning = FALSE, message=FALSE}
+
+df_grouped %>%
+# used ggplot to graph the results
+ggplot(aes(x=occupation,y=sick_rate)) +
+geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE)+
+# add a smoothing line
+labs(x="Age", y="sick rate", title = "Sickness rate by age, occupation") +
+theme_pander() + scale_color_gdocs() +
+facet_wrap(~sex, ncol=2, nrow=3)
+
+
 ```
 
 # Model selection {.tabset .tabset-fade .tabset-pills}
@@ -595,9 +647,15 @@ df_test <- df[-sample_rows,]
 ```
 
 ### Class imbalance
-Looking at the random sample we have created, we have a significant imbalance between successes and failures. "In insurance applications, the prediction of a claim or no claim on an individual policy is rarely the point of statistical modelling ... The model is useful provided it explains the variability in claims behaviour, as a function of risk factors. " [@GLM_Insurance, p108-109] So, long as we have sufficient actual claims to justify the level of predictor variables fitted to the model we should be ok.
+Looking at the random sample we have created, we have a significant imbalance between successes and failures. 
 
-However, in some cases where the response variable is a binary categorical variable we may need to create a sample that has a roughly equal proportion of classes and then fit our model to that data. This might be true where we are interested in accurately predicting the outcome of individual records like testing banking transactions data for fraud.
+```{r Split data - review, class.source = 'fold-show'}
+df_train %>% select(inc_count_acc,inc_count_sick) %>% table()
+```
+
+Generally, "in insurance applications, the prediction of a claim or no claim on an individual policy is rarely the point of statistical modelling ... The model is useful provided it explains the variability in claims behaviour, as a function of risk factors. " [@GLM_Insurance, p108-109] So, as long as we have sufficient actual claims to justify the level of predictor variables fitted to the model we should be ok.
+
+However, in some cases where it is important to correctly predict the binary categorical response variable, we may need to create a sample that has a roughly equal proportion of classes (of successes and failures) and then fit our model to that data. E.g. where we are looking to accurately predict fraud within banking transactions data.
 
 To do that we need to refine our sampling method
 
@@ -621,6 +679,7 @@ Linear regression is a method of modelling the relationship between a response (
 $y_{i} = \beta_{0} + \beta_{1}x_{i1} + ... + \beta_{p}x_{ip} + \epsilon_{i} = \mathbf{x}_{i}^t\mathbf{\beta} + \epsilon_{i}$, $i = 1,...,n$
 
 Key assumptions
+
 * linearity - response is some linear combination of regression coefficients and explanatory variables
 * constant variance (homoskedastic) - variance of errors does not depend upon explanatory variables
 * errors are independent - response variables uncorrelated
@@ -628,14 +687,16 @@ Key assumptions
 * weak exogeneity - predictors treated as fixed / no measurement error.
 
 ### Linear vs logistic regression 
-Linear: Continuous response outcome i.e. predicting a continuous response/dependent variable using a set of explanatory variables
-Logistic: Binary response outcome - straight line does not fit the data well. Fit with a logistic function, the predicted values are always between 0 and 1. Hard to transform to linear chart - probabilities are not linear but log odds are. We can transform to odds ratios by taking the exponential of the coefficients or exp(coef(model)) - this shows the relative change to odds of the response variables
-	Odds-ratio = 1, the coefficient has no effect. 
-	Odds-ratio is <1, the coefficient predicts a decreased chance of an event occurring. 
-	Odds-ratio is >1, the coefficient predicts an increased chance of an event occurring.
-	
-[Offset](https://towardsdatascience.com/offsetting-the-model-logic-to-implementation-7e333bc25798): adjustment for exposure; important in an insurance context where we are often interested in modelling rates of claim.
 
+* Linear: Continuous response outcome i.e. predicting a continuous response/dependent variable using a set of explanatory variables
+* Logistic: Binary response outcome - straight line does not fit the data well. The predicted values are always between 0 and 1. 
+
+For logistic regression the log odds are linear. We can transform to odds ratios by taking the exponential of the coefficients or exp(coef(model)) - this shows the relative change to odds of the response variables, where
+
+*	Odds-ratio = 1, the coefficient has no effect. 
+*	Odds-ratio is <1, the coefficient predicts a decreased chance of an event occurring. 
+*	Odds-ratio is >1, the coefficient predicts an increased chance of an event occurring.
+	
 ### Logistic regression for claims incidence
 A simple regression model is shown below. Interpreting co-efficients and other output:
 
@@ -645,17 +706,18 @@ A simple regression model is shown below. Interpreting co-efficients and other o
 Other output
 
 * Pr(>|z|)/ p value is the probability coefficient result you're seeing happened due to random variation. Commonly a p-value of .05 or less is significant.
-* AIC a likelihood tests, useful for model comparison.
+* AIC and likelihood tests, useful for model comparison.
 * Residuals sections gives summary stats of the model.
 * Call gives the form of the model.
-
+* vcov(model) gives the variance-covariance matrix for fitted model (diagonals are variance and off diagonals are covariance - 0 if all variables are orthogonal).
+* coef(model) returns the model coefficients.
 
 ```{r Logistic regression - base, class.source = 'fold-show'}
 model_1 <- glm(inc_count_sick~age,data=df_train,family="binomial") # use the default link
 summary(model_1)
 ```
 
-Choice of [link function](https://en.wikipedia.org/wiki/Generalized_linear_model): the link function defines the relationship of response variables to mean. It is usually sufficient to use the standard link. Section below shows a model with the link specified (results are the same as the model above)/
+Choice of [link function](https://en.wikipedia.org/wiki/Generalized_linear_model): the link function defines the relationship of response variables to mean. It is usually sufficient to use the standard link. Section below shows a model with the link specified (results are the same as the model above).
 
 ```{r Logistic regression - link function, class.source = 'fold-show', results='hide'}
 model_2 <- glm(inc_count_sick~age,data=df_train,family=binomial(link="logit")) # specify the link, logit is default for binomial
@@ -664,7 +726,7 @@ summary(model_2)
 
 Adding more response variables: When deciding on explanatory variables to model, consider the properties of the data (like correlation or colinearity). 
 ```{r Logistic regression - more variables, class.source = 'fold-show'}
-model_3 <- glm(inc_count_sick~age+sex+waiting_period,data=df_train,family=binomial(link="logit")) 
+model_3 <- glm(inc_count_sick~age+policy_year+sex+waiting_period,data=df_train,family=binomial(link="logit")) 
 summary(model_3)
 ```
 
@@ -732,7 +794,7 @@ The example below compares a model of counts by age and sex on the grouped and s
 
 ```{r Logistic regression - grouped}
 # grouped model
-model_4 <- glm(cbind(inc_count_sick,exposure)~age+sex,data=df_grp,family=binomial(link="logit")) 
+model_4 <- glm(cbind(inc_count_sick,exposure-inc_count_sick)~age+sex,data=df_grp,family=binomial(link="logit")) # cbind gives a matrix of successes and failures
 # use tidy to visualise the modelled result
 tidy(model_4) %>% kbl(caption = "Modeled result - grouped data")
 # ungrouped model, coefficients materially similar
@@ -740,10 +802,15 @@ model_5 <- glm(inc_count_sick~age+sex,data=df,family=binomial(link="logit"))
 tidy(model_5) %>% kbl(caption = "Modeled result - ungrouped data")
 ```
 ### Offsets
+When the data are grouped, it is important to consider the level of exposure in a given group. This can be achieved with an [offset](https://towardsdatascience.com/offsetting-the-model-logic-to-implementation-7e333bc25798) term (@GLM_Insurance, p66-67). This is important in an insurance context where we are often interested in modelling rates of claim. 
 
-df_grp_filtered <- df_grp %>% filter(inc_count_sick>1)
-model_4 <- glm.nb(inc_count_sick~age+sex + offset(exposure),data=df_grp_filtered) 
-tidy(model_4)
+```{r Logistic regression - offset}
+df_grp_filtered <- df_grp %>% filter(inc_count_tot>1, exposure>10)
+model_6 <- glm(inc_amount_tot~age+sex+offset(sum_assured),data=df_grp_filtered) 
+tidy(model_6)
+model_7 <- glm(inc_amount_tot~age+sex,data=df_grp_filtered) 
+tidy(model_7)
+```
 
 
 ## Actuals or AvE?
@@ -753,9 +820,9 @@ Using the grouped data again, we model A/E with a normal response distribution. 
 
 ```{r Logistic regression - grouped A/E}
 # grouped model
-model_6 <- glm(inc_count_sick/inc_count_sick_exp~age+sex,data=df_grp) 
+model_8 <- glm(inc_count_sick/inc_count_sick_exp~age+sex,data=df_grp) 
 # use tidy to visualise the modelled result
-summary(model_6)
+summary(model_8)
 ```
 
 ## Stepwise regression
@@ -766,7 +833,7 @@ This method builds a regression model from a set of candidate predictor variable
 null_model_sick <- glm(inc_count_sick ~ 1, data = df_train, family = "binomial")
 
 # specify the full model using all of the potential predictors
-full_model_sick <- glm(inc_count_sick ~ cal_year + policy_year + sex + smoker + benefit_period + waiting_period + occupation + poly(age,3) + sum_assured, data = df_train, family = "binomial")
+full_model_sick <- glm(inc_count_sick ~ cal_year + policy_year + sex + smoker + benefit_period + waiting_period + occupation + poly(age,3) + sum_assured + policy_year*age + policy_year*sum_assured, data = df_train, family = "binomial")
 
 # alternatively, glm(y~ . -x1) fits model using all variables excluding x1
 
@@ -866,14 +933,16 @@ In progress.
 # Evaluation {.tabset .tabset-fade .tabset-pills}
 ## Techniques
 
+### AIC
 For least squares regression the $R^{2}$ statistic ([coefficient of determination](https://en.wikipedia.org/wiki/Coefficient_of_determination)) measures the proportion of variance in the dependent variable that can be explained by the independent variables. Adjusted $R^{2}$, adjusts for the number of predictors in the model. The adjusted $R^{2}$ increases when the new predictor improves the model more than would be expected by chance. The glm function uses a maximum likelihood estimator which does not minimize the squared error.
 
-AIC stands for Akaike Information Criteria. $AIC = -2l+2p$ where $l$ is the log likelihood and $p$ are the number of parameters. It is analogous to adjusted $R^{2}$ and is the measure of fit which penalizes model for the number of independent variables. We prefer a model with a lower AIC value.
+AIC stands for [Akaike Information Criteria](https://en.wikipedia.org/wiki/Akaike_information_criterion). $AIC = -2l+2p$ where $l$ is the log likelihood and $p$ are the number of parameters. It is analogous to adjusted $R^{2}$ and is the measure of fit which penalizes model for the number of independent variables. We prefer a model with a lower AIC value.
 
 ```{r Re-attatch MASS, class.source = 'fold-show', warning = FALSE, echo=FALSE, results = FALSE, message=FALSE}
 # MASS package interferes with pairs() and cor(), reload here for stats tests later
 library("MASS")
 library("arm")
+library("msme")
 ```
 
 The results below show the AIC for model 3 is lower than model 1 and that the final step model has the lowest AIC of those evaluated (preferred).
@@ -884,17 +953,30 @@ AIC(model_3)
 stepAIC(step_model_sick)
 ```
 
-An anova comparison below between model_3 and the step model using a Chi-squared test shows Df of 5 for the step model (5 more variables), a small p value for the stepped model (indicating that the model is an improvement). F-test can be used on continuous response models.
+### Anova
+
+An anova comparison below between model_3 and the step model using a Chi-squared test shows a small p value for the stepped model - indicating that the model is an improvement. F-test can be used on continuous response models.
 
 ```{r Evaluation - anova, class.source = 'fold-show'}
 anova(model_3,step_model_sick, test="Chisq")
 ```
 
+### Likelihood ratio test
+The [likelihood ratio test](https://en.wikipedia.org/wiki/Likelihood-ratio_test) compares two models based upon log likelihoods; more at @GLM_Insurance, p74.
+
+The test below concludes that the step model is more accurate than the less complex model.
+
+```{r Evaluation - likelihood ratio, class.source = 'fold-show'}
+lrtest(model_3,step_model_sick)
+```
+
+### Other tests
+Other validations tests could be considered like the [Wald test](https://en.wikipedia.org/wiki/Wald_test), [Score test](https://en.wikipedia.org/wiki/Score_test); see @GLM_Insurance, p74-77.
+
 ## Residual checks
 Residuals/ errors are the observed less fitted values. Traditional residual plots (shown below) are usually a good starting point (we expect to see no trend in the plot of residuals vs fitted values), but are not as informative for logistic regression or for data with a low probability outcome. 
 
 ### Standard model plots
-
 Plots, linear regression example:
 
 ```{r Evaluation - traditional plots linear reg}
@@ -910,9 +992,7 @@ plot(step_model_sick)
 ```
 
 ### Alternatives
-For logistic regression we can try other tools to test the residuals against the model assumptions. 
-
-GLMs assume that the residuals/ errors are normally distributed. Plotting the density of the residuals gives us:
+For logistic regression we can try other tools to test the residuals against the model assumptions. GLMs assume that the residuals/ errors are normally distributed. Plotting the density of the residuals gives us:
 
 ```{r Evaluation - histogram of residuals}
 hist(rstandard(step_model_sick),breaks= c(seq(-1,1,by=0.001),seq(2,5, by=1)),freq=FALSE,main = "Histogram of residuals",xlab = "Residuals")
@@ -954,20 +1034,12 @@ plot(ppoints(length(x)), sort(probDist), main = "PP Plot", xlab = "Observed Prob
 abline(0,1)
 ```
 
-## Leave-one-out cross validation
+### Other tests
 
-## Other tests
+[Pearson dispersion test](https://search.r-project.org/CRAN/refmans/msme/html/P__disp.html): This function calculates Pearson Chi2 statistic and the Pearson-based dipersion statistic. Values of the dispersion greater than 1 indicate model overdispersion. Values under 1 indicate under-dispersion.
 
-```{r Glm model testing}
-#Check for binomial assumption
-#Pearson.dispersion.factor<-sum((Policy_lapse_full_DII2_samp$Lapse_ind-fitted(glm_lapse_full_DII))^2/(fitted(glm_lapse_full_DII)*(1 - fitted(glm_lapse_full_DII))))/(nrow(Policy_lapse_full_DII2_samp)-nrow(coef(summary(glm_lapse_full_DII)))-1)
-#Pearson.dispersion.factor #Needs to be close to one
-#cat("Pearson dispersion Factor =", Pearson.dispersion.factor)
-
-#Wald test
- 
-#Score test
-
+```{r Evaluation - pearson dispersion}
+P__disp(step_model_sick)
 ```
 
 ## Confusion matrix
@@ -981,7 +1053,7 @@ Where:
 * Sensitivity = True Positive Rate
 * Specificity = 1 – False Positive Rate
 
-A perfect classification model could have Sensitivity and Specificity close to 1. However, we noted earlier, in insurance applications we are not often interested in in an accurate prediction as to whether a given policy gives rise to a claim. Rather we are interested in understanding the claim rates and how they are explained by the response variables/ risk factors[@GLM_Insurance, p108-109].
+A perfect classification model could have Sensitivity and Specificity close to 1. However, we noted earlier, in insurance applications we are not often interested in in an accurate prediction as to whether a given policy gives rise to a claim. Rather we are interested in understanding the claim rates and how they are explained by the response variables/ risk factors [@GLM_Insurance, p108-109].
 
 A confusion matrix is a tabular representation of Observed vs Predicted values. It helps to quantify the efficiency (or accuracy) of the model.
 
@@ -989,6 +1061,7 @@ A confusion matrix is a tabular representation of Observed vs Predicted values. 
 # MASS package interferes with pairs() and cor() and others
 require(arm) # package
 detach(package:arm)
+detach(package:msme)
 detach(package:MASS)
 ```
 
@@ -1023,12 +1096,7 @@ coords(roc, "best", ret = "threshold")
 ```
 
 # References {.tabset .tabset-fade .tabset-pills}
-## Bibliography
 
 <div id="refs"></div>
 
-## Further reading
 
-* [R Markdown Cookbook](https://bookdown.org/yihui/rmarkdown-cookbook/) has everything you need to know to set up an r markdown document like this one.
-* [Generalised Linear Models for Insurance Data](https://www.cambridge.org/au/academic/subjects/statistics-probability/statistics-econometrics-finance-and-insurance/generalized-linear-models-insurance-data?format=HB&isbn=9780521879149) is a great book introducing GLMs in the context of insurance, considering problems specific to insurance data.
-* [Tidyverse documentation](https://www.tidyverse.org/) full set of documentation for Tidyverse packages (packages for data science) e.g. dplyr for data manipulation; tidyr for tidying up messy data; ggplot for visualisation.
