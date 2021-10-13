@@ -7,6 +7,7 @@ output:
   rmdformats::downcute:
     self_contained: true
     code_folding: hide
+    after_body: footer.html
 bibliography: references.bib 
 link-citations: yes
 ---
