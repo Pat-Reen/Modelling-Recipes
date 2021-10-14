@@ -2,15 +2,44 @@
 title: "Modelling recipes"
 knit: (function(input_file, encoding) {out_dir <- 'docs';rmarkdown::render(input_file,encoding=encoding, output_file=file.path(dirname(input_file), out_dir,'index.html'))})
 subtitle: "With (life) insurance data"
-author: "Pat Reen"
+author: "[Pat Reen](https://www.linkedin.com/in/patrick-reen/)"
 output: 
   rmdformats::downcute:
-    self_contained: true
+    includes: 
+        in_header: docs\header.html
+    self_contained: false
     code_folding: hide
-    after_body: footer.html
 bibliography: references.bib 
 link-citations: yes
 ---
+
+```{css, echo=FALSE}
+#toc {
+  background: url("img/image.png");
+  background-size: contain 20%;
+  padding-top: 200px;
+  background-repeat: no-repeat;
+}
+```
+
+```{r htmlHeader, echo=FALSE}
+# Create the external file
+
+htmlhead <- paste0('
+
+<!-- Add icon library -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+
+<!-- Add icon font -->
+<p style="position:absolute; top:0; right:20px; ">
+    <a href="https://www.linkedin.com/in/patrick-reen/" class="fa fa-linkedin" style="font-size:24px"></a>
+    <a href="https://github.com/Pat-Reen/" class="fa fa-github" style="font-size:24px"></a>
+</p>
+
+')
+
+readr::write_lines(htmlhead, file = "docs/header.html")
+```
 
 # Overview {.tabset .tabset-fade .tabset-pills}
 ## Background 
@@ -24,6 +53,8 @@ This document sets out a few practical recipes for modelling with (life) insuran
   + Model selection: stepwise regression, likelihood tests, model evaluation
   + Predictions, confidence intervals and visualisations
 * Bayesian regression and other classification models - to follow.
+
+See link above to GitHub repository which has the detailed code.
 
 ## Libraries
 A list of packages used in the recipe book.
