@@ -7,6 +7,7 @@ output:
   rmdformats::downcute:
     includes: 
         in_header: docs\header.html
+        css: "style.css"
     self_contained: false
     code_folding: hide
 bibliography: references.bib 
@@ -43,7 +44,7 @@ readr::write_lines(htmlhead, file = "docs/header.html")
 
 # Overview {.tabset .tabset-fade .tabset-pills}
 ## Background 
-This document sets out a few practical recipes for modelling with (life) insurance data. Insurance events are typically of low probability - these recipes consider some of the limitations of "small data" model fitting (where the observations of interest are sparse) and other topics for insurance like comparisons to standard tables. Themes
+This article sets out a few practical recipes for modelling with (life) insurance data. Insurance events are typically of low probability - these recipes consider some of the limitations of "small data" model fitting (where the observations of interest are sparse) and other topics for insurance like comparisons to standard tables. Themes
 
 * Common data transforms, summary stats, and simple visualisations
 * Regression 
@@ -52,7 +53,6 @@ This document sets out a few practical recipes for modelling with (life) insuran
   + Modelling variance to industry/ reference (A/E or A - E)
   + Model selection: stepwise regression, likelihood tests, model evaluation
   + Predictions, confidence intervals and visualisations
-* Bayesian regression and other classification models - to follow.
 
 See link above to GitHub repository which has the detailed code.
 
@@ -273,10 +273,10 @@ subset(df, age <25 | age > 60)
 		new_df <- df[!mycols]
 		# exclude 3rd and 5th column
 		new_df <- df[c(-3,-5)]
-		# delete columns v1 and v2 from new_df
-		new_df$v3 <- new_df$v5 <- NULL
+		# delete columns from new_df
+		new_df$pol_id <- NULL
 #	keeping columns: 
-		# select variables v1, v2, v3
+		# select variables by col name
 		mycols <- names(df) %in% c("cal_year", "smoker")
 		new_df <- df[!mycols]
 		# select 1st and 5th to 7th variables
